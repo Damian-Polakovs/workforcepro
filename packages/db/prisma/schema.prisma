@@ -1,0 +1,258 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("POSTGRES_URL")
+}
+
+enum UserRole {
+  EMPLOYEE
+  MANAGER
+  ADMIN
+}
+
+enum EmploymentType {
+  FULL_TIME
+  PART_TIME
+  CONTRACT
+}
+
+enum PayrollFrequency {
+  WEEKLY
+  FORTNIGHTLY
+  MONTHLY
+}
+
+enum ShiftStatus {
+  DRAFT
+  PUBLISHED
+  COMPLETED
+  MISSED
+}
+
+enum TimesheetStatus {
+  CLOCKED_IN
+  ON_BREAK
+  CLOCKED_OUT
+  APPROVED
+  FLAGGED
+}
+
+enum LeaveType {
+  ANNUAL
+  SICK
+  MEDICAL
+  PERSONAL
+  UNPAID
+}
+
+enum LeaveStatus {
+  PENDING
+  APPROVED
+  DECLINED
+}
+
+enum CorrectionStatus {
+  PENDING
+  APPROVED
+  REJECTED
+}
+
+model Company {
+  id                     String            @id @default(cuid())
+  name                   String            @unique
+  timezone               String
+  currency               String            @default("EUR")
+  payrollFrequency       PayrollFrequency  @default(WEEKLY)
+  standardDayHours       Int               @default(8)
+  standardWeekHours      Int               @default(40)
+  overtimeDailyThreshold Int               @default(8)
+  overtimeWeeklyThreshold Int              @default(40)
+  overtimeMultiplier     Float             @default(1.5)
+  bankHolidayMultiplier  Float             @default(2)
+  createdAt              DateTime          @default(now())
+  updatedAt              DateTime          @updatedAt
+  auditLogs              AuditLog[]
+  corrections            TimeCorrection[]
+  leaveRequests          LeaveRequest[]
+  shifts                 Shift[]
+  teams                  Team[]
+  timesheets             Timesheet[]
+  users                  User[]
+}
+
+model Team {
+  id        String   @id @default(cuid())
+  companyId String
+  name      String
+  code      String
+  color     String
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+  company   Company  @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  shifts    Shift[]
+  users     User[]
+
+  @@unique([companyId, code])
+}
+
+model User {
+  id                    String           @id @default(cuid())
+  companyId             String
+  teamId                String?
+  name                  String
+  email                 String           @unique
+  role                  UserRole
+  employmentType        EmploymentType   @default(FULL_TIME)
+  phone                 String?
+  hourlyRate            Float
+  standardHoursPerWeek  Int              @default(40)
+  leaveBalanceDays      Float            @default(20)
+  avatarInitials        String
+  faceEnrolled          Boolean          @default(false)
+  faceTemplateHash      String?
+  faceEnrollmentCapturedAt DateTime?
+  faceEnrollmentConfidence Float?
+  active                Boolean          @default(true)
+  hireDate              DateTime
+  createdAt             DateTime         @default(now())
+  updatedAt             DateTime         @updatedAt
+  auditLogs             AuditLog[]       @relation("AuditActor")
+  company               Company          @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  corrections           TimeCorrection[] @relation("CorrectionAuthor")
+  createdShifts         Shift[]          @relation("ShiftCreator")
+  leaveRequests         LeaveRequest[]   @relation("LeaveRequester")
+  reviewedCorrections   TimeCorrection[] @relation("CorrectionReviewer")
+  reviewedLeaves        LeaveRequest[]   @relation("LeaveReviewer")
+  approvedTimesheets    Timesheet[]      @relation("TimesheetApprover")
+  shifts                Shift[]          @relation("ShiftAssignee")
+  team                  Team?            @relation(fields: [teamId], references: [id], onDelete: SetNull)
+  timesheets            Timesheet[]
+}
+
+model Shift {
+  id                String      @id @default(cuid())
+  code              String      @unique
+  companyId         String
+  teamId            String
+  assignedToId      String
+  createdById       String
+  title             String
+  startTime         DateTime
+  endTime           DateTime
+  paidBreakMinutes  Int         @default(0)
+  unpaidBreakMinutes Int        @default(30)
+  bankHoliday       Boolean     @default(false)
+  premiumMultiplier Float       @default(1)
+  notes             String?
+  status            ShiftStatus @default(PUBLISHED)
+  publishedAt       DateTime?
+  createdAt         DateTime    @default(now())
+  updatedAt         DateTime    @updatedAt
+  assignee          User        @relation("ShiftAssignee", fields: [assignedToId], references: [id], onDelete: Cascade)
+  company           Company     @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  createdBy         User        @relation("ShiftCreator", fields: [createdById], references: [id], onDelete: Cascade)
+  team              Team        @relation(fields: [teamId], references: [id], onDelete: Cascade)
+  timesheet         Timesheet?
+}
+
+model Timesheet {
+  id                    String           @id @default(cuid())
+  reference             String           @unique
+  companyId             String
+  userId                String
+  shiftId               String?          @unique
+  workDate              DateTime
+  clockInAt             DateTime?
+  clockOutAt            DateTime?
+  breakMinutes          Int              @default(0)
+  regularMinutes        Int              @default(0)
+  overtimeMinutes       Int              @default(0)
+  grossPay              Float            @default(0)
+  lateMinutes           Int              @default(0)
+  earlyDepartureMinutes Int              @default(0)
+  faceVerified          Boolean          @default(false)
+  faceConfidence        Float?
+  status                TimesheetStatus  @default(CLOCKED_IN)
+  approvalSignature     String?
+  approvedAt            DateTime?
+  approvedById          String?
+  notes                 String?
+  createdAt             DateTime         @default(now())
+  updatedAt             DateTime         @updatedAt
+  approvedBy            User?            @relation("TimesheetApprover", fields: [approvedById], references: [id], onDelete: SetNull)
+  breaks                BreakEntry[]
+  company               Company          @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  correctionRequests    TimeCorrection[]
+  shift                 Shift?           @relation(fields: [shiftId], references: [id], onDelete: SetNull)
+  user                  User             @relation(fields: [userId], references: [id], onDelete: Cascade)
+}
+
+model BreakEntry {
+  id         String    @id @default(cuid())
+  timesheetId String
+  startAt    DateTime
+  endAt      DateTime?
+  paid       Boolean   @default(false)
+  reason     String?
+  createdAt  DateTime  @default(now())
+  timesheet  Timesheet @relation(fields: [timesheetId], references: [id], onDelete: Cascade)
+}
+
+model LeaveRequest {
+  id         String      @id @default(cuid())
+  reference  String      @unique
+  companyId  String
+  userId     String
+  approverId String?
+  type       LeaveType
+  status     LeaveStatus @default(PENDING)
+  startDate  DateTime
+  endDate    DateTime
+  hours      Float
+  reason     String
+  comment    String?
+  reviewedAt DateTime?
+  createdAt  DateTime    @default(now())
+  updatedAt  DateTime    @updatedAt
+  approver   User?       @relation("LeaveReviewer", fields: [approverId], references: [id], onDelete: SetNull)
+  company    Company     @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  user       User        @relation("LeaveRequester", fields: [userId], references: [id], onDelete: Cascade)
+}
+
+model TimeCorrection {
+  id                   String           @id @default(cuid())
+  reference            String           @unique
+  companyId            String
+  userId               String
+  timesheetId          String?
+  reviewerId           String?
+  status               CorrectionStatus @default(PENDING)
+  requestedClockInAt   DateTime?
+  requestedClockOutAt  DateTime?
+  reason               String
+  resolutionNote       String?
+  reviewedAt           DateTime?
+  createdAt            DateTime         @default(now())
+  updatedAt            DateTime         @updatedAt
+  company              Company          @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  reviewer             User?            @relation("CorrectionReviewer", fields: [reviewerId], references: [id], onDelete: SetNull)
+  timesheet            Timesheet?       @relation(fields: [timesheetId], references: [id], onDelete: SetNull)
+  user                 User             @relation("CorrectionAuthor", fields: [userId], references: [id], onDelete: Cascade)
+}
+
+model AuditLog {
+  id         String   @id @default(cuid())
+  companyId  String
+  actorId    String?
+  entityType String
+  entityId   String
+  action     String
+  summary    String
+  metadata   Json?
+  createdAt  DateTime @default(now())
+  actor      User?    @relation("AuditActor", fields: [actorId], references: [id], onDelete: SetNull)
+  company    Company  @relation(fields: [companyId], references: [id], onDelete: Cascade)
+}

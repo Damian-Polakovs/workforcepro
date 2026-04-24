@@ -1,0 +1,27 @@
+@import "tailwindcss/theme.css" layer(theme);
+@import "tailwindcss/preflight.css" layer(base);
+@import "tailwindcss/utilities.css";
+
+@import "nativewind/theme";
+
+:root {
+  --background: #0d1b2a;
+  --foreground: #f4efe8;
+  --card: #10253a;
+  --card-foreground: #f4efe8;
+  --popover: #10253a;
+  --popover-foreground: #f4efe8;
+  --primary: #ff764a;
+  --primary-foreground: #ffffff;
+  --secondary: #17324a;
+  --secondary-foreground: #d6e2ec;
+  --muted: #17324a;
+  --muted-foreground: #9fb4c8;
+  --accent: #4ecdc4;
+  --accent-foreground: #092130;
+  --destructive: #ef4444;
+  --destructive-foreground: #ffffff;
+  --border: rgba(255, 255, 255, 0.12);
+  --input: rgba(255, 255, 255, 0.14);
+  --ring: #ff764a;
+}

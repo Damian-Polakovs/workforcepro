@@ -1,51 +1,136 @@
-/**
- * YOU PROBABLY DON'T NEED TO EDIT THIS FILE, UNLESS:
- * 1. You want to modify request context (see Part 1)
- * 2. You want to create a new middleware or type of procedure (see Part 3)
- *
- * tl;dr - this is where all the tRPC server stuff is created and plugged in.
- * The pieces you will need to use are documented accordingly near the end
- */
+import { createClerkClient } from "@clerk/backend";
 import { initTRPC, TRPCError } from "@trpc/server";
 import superjson from "superjson";
 import { z, ZodError } from "zod/v4";
 
-import type { Auth } from "@acme/auth";
-import { db } from "@acme/db/client";
+import { db, ensureDemoDataOnce } from "@acme/db";
+import { DEFAULT_ADMIN_EMAIL, VIEWER_HEADER_NAME } from "@acme/validators";
 
-/**
- * 1. CONTEXT
- *
- * This section defines the "contexts" that are available in the backend API.
- *
- * These allow you to access things when processing a request, like the database, the session, etc.
- *
- * This helper generates the "internals" for a tRPC context. The API handler and RSC clients each
- * wrap this and provides the required context.
- *
- * @see https://trpc.io/docs/server/context
- */
+interface ClerkIdentity {
+  email: string | null;
+  isAuthenticated: boolean;
+  userId: string | null;
+}
+
+const clerkSecretKey = process.env.CLERK_SECRET_KEY;
+const clerkPublishableKey = process.env.NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY;
+
+const clerkClient =
+  clerkSecretKey && clerkPublishableKey
+    ? createClerkClient({
+        apiUrl: process.env.CLERK_API_URL,
+        publishableKey: clerkPublishableKey,
+        secretKey: clerkSecretKey,
+      })
+    : null;
+
+const getPrimaryEmailAddress = async (userId: string) => {
+  if (!clerkClient) {
+    return null;
+  }
+
+  const user = await clerkClient.users.getUser(userId);
+  const primaryEmail = user.emailAddresses.find(
+    (emailAddress) => emailAddress.id === user.primaryEmailAddressId,
+  );
+
+  return (
+    primaryEmail?.emailAddress ?? user.emailAddresses[0]?.emailAddress ?? null
+  );
+};
+
+const authenticateClerkRequest = async (request: Request) => {
+  if (!clerkClient) {
+    return {
+      email: null,
+      isAuthenticated: true,
+      userId: null,
+    } satisfies ClerkIdentity;
+  }
+
+  try {
+    const requestState = await clerkClient.authenticateRequest(request, {
+      acceptsToken: "session_token",
+    });
+    const auth = requestState.toAuth();
+
+    if (!auth?.isAuthenticated || !auth.userId) {
+      return {
+        email: null,
+        isAuthenticated: false,
+        userId: null,
+      } satisfies ClerkIdentity;
+    }
+
+    return {
+      email: await getPrimaryEmailAddress(auth.userId),
+      isAuthenticated: true,
+      userId: auth.userId,
+    } satisfies ClerkIdentity;
+  } catch (error) {
+    console.warn("[Clerk] Failed to authenticate request", error);
+
+    return {
+      email: null,
+      isAuthenticated: false,
+      userId: null,
+    } satisfies ClerkIdentity;
+  }
+};
+
+const findViewer = async (emails: (string | null | undefined)[]) => {
+  const uniqueEmails = [
+    ...new Set(emails.filter((email): email is string => Boolean(email))),
+  ];
+
+  for (const email of uniqueEmails) {
+    const viewer = await db.user.findUnique({
+      include: {
+        company: true,
+        team: true,
+      },
+      where: {
+        email,
+      },
+    });
+
+    if (viewer) {
+      return viewer;
+    }
+  }
+
+  return null;
+};
 
 export const createTRPCContext = async (opts: {
   headers: Headers;
-  auth: Auth;
+  request?: Request;
 }) => {
-  const authApi = opts.auth.api;
-  const session = await authApi.getSession({
-    headers: opts.headers,
-  });
+  await ensureDemoDataOnce(db);
+
+  const request =
+    opts.request ??
+    new Request("http://localhost/api/trpc", {
+      headers: opts.headers,
+    });
+  const clerk = await authenticateClerkRequest(request);
+
+  const viewer = clerk.isAuthenticated
+    ? await findViewer([
+        clerk.email,
+        opts.headers.get(VIEWER_HEADER_NAME),
+        DEFAULT_ADMIN_EMAIL,
+      ])
+    : null;
+
   return {
-    authApi,
-    session,
+    clerk,
     db,
+    headers: opts.headers,
+    viewer,
   };
 };
-/**
- * 2. INITIALIZATION
- *
- * This is where the trpc api is initialized, connecting the context and
- * transformer
- */
+
 const t = initTRPC.context<typeof createTRPCContext>().create({
   transformer: superjson,
   errorFormatter: ({ shape, error }) => ({
@@ -60,69 +145,46 @@ const t = initTRPC.context<typeof createTRPCContext>().create({
   }),
 });
 
-/**
- * 3. ROUTER & PROCEDURE (THE IMPORTANT BIT)
- *
- * These are the pieces you use to build your tRPC API. You should import these
- * a lot in the /src/server/api/routers folder
- */
-
-/**
- * This is how you create new routers and subrouters in your tRPC API
- * @see https://trpc.io/docs/router
- */
 export const createTRPCRouter = t.router;
 
-/**
- * Middleware for timing procedure execution and adding an articifial delay in development.
- *
- * You can remove this if you don't like it, but it can help catch unwanted waterfalls by simulating
- * network latency that would occur in production but not in local development.
- */
 const timingMiddleware = t.middleware(async ({ next, path }) => {
-  const start = Date.now();
-
-  if (t._config.isDev) {
-    // artificial delay in dev 100-500ms
-    const waitMs = Math.floor(Math.random() * 400) + 100;
-    await new Promise((resolve) => setTimeout(resolve, waitMs));
-  }
-
+  const startedAt = Date.now();
   const result = await next();
+  const duration = Date.now() - startedAt;
 
-  const end = Date.now();
-  console.log(`[TRPC] ${path} took ${end - start}ms to execute`);
-
+  console.log(`[TRPC] ${path} completed in ${duration}ms`);
   return result;
 });
 
-/**
- * Public (unauthed) procedure
- *
- * This is the base piece you use to build new queries and mutations on your
- * tRPC API. It does not guarantee that a user querying is authorized, but you
- * can still access user session data if they are logged in
- */
 export const publicProcedure = t.procedure.use(timingMiddleware);
 
-/**
- * Protected (authenticated) procedure
- *
- * If you want a query or mutation to ONLY be accessible to logged in users, use this. It verifies
- * the session is valid and guarantees `ctx.session.user` is not null.
- *
- * @see https://trpc.io/docs/procedures
- */
 export const protectedProcedure = t.procedure
   .use(timingMiddleware)
   .use(({ ctx, next }) => {
-    if (!ctx.session?.user) {
+    if (!ctx.viewer) {
       throw new TRPCError({ code: "UNAUTHORIZED" });
     }
+
     return next({
       ctx: {
-        // infers the `session` as non-nullable
-        session: { ...ctx.session, user: ctx.session.user },
+        ...ctx,
+        viewer: ctx.viewer,
       },
     });
   });
+
+export const managerProcedure = protectedProcedure.use(({ ctx, next }) => {
+  if (ctx.viewer.role === "EMPLOYEE") {
+    throw new TRPCError({ code: "FORBIDDEN" });
+  }
+
+  return next();
+});
+
+export const adminProcedure = protectedProcedure.use(({ ctx, next }) => {
+  if (ctx.viewer.role !== "ADMIN") {
+    throw new TRPCError({ code: "FORBIDDEN" });
+  }
+
+  return next();
+});

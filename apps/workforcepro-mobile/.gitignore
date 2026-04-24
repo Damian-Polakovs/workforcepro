@@ -1,0 +1,9 @@
+node_modules
+.env
+.expo
+.turbo
+.cache
+ios
+android
+dist
+expo-env.d.ts

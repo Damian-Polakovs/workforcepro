@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   ActivityIndicator,
   Pressable,
@@ -14,6 +14,8 @@ import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { trpc } from "~/utils/api";
 
 type ScanMode = "clockIn" | "clockOut" | "enroll";
+const maxFaceImageBase64Length = 12_000_000;
+const cameraDeviceLabel = "WorkForcePro front camera scanner";
 
 const resolveMode = (mode: string | string[] | undefined): ScanMode => {
   const value = Array.isArray(mode) ? mode[0] : mode;
@@ -45,6 +47,8 @@ const buildFrameSignature = (props: {
 };
 
 const createFaceScan = (props: {
+  deviceLabel?: string;
+  imageBase64: string;
   height?: number;
   mode: ScanMode;
   uri?: string;
@@ -54,8 +58,7 @@ const createFaceScan = (props: {
 
   return {
     capturedAt,
-    confidence: 0.94 + Math.random() * 0.05,
-    deviceLabel: "WorkForcePro front camera scanner",
+    deviceLabel: props.deviceLabel ?? cameraDeviceLabel,
     frameSignature: buildFrameSignature({
       capturedAt,
       height: props.height,
@@ -63,8 +66,41 @@ const createFaceScan = (props: {
       uri: props.uri,
       width: props.width,
     }),
-    livenessPassed: true,
+    imageBase64: props.imageBase64,
   };
+};
+
+const parsePictureSize = (value: string) => {
+  const match = value.match(/^(\d+)x(\d+)$/);
+  if (!match) {
+    return null;
+  }
+
+  const width = Number(match[1]);
+  const height = Number(match[2]);
+
+  if (!Number.isFinite(width) || !Number.isFinite(height)) {
+    return null;
+  }
+
+  return {
+    area: width * height,
+    height,
+    value,
+    width,
+  };
+};
+
+const selectFacePictureSize = (sizes: string[]) => {
+  const parsed = sizes
+    .map(parsePictureSize)
+    .filter((size): size is NonNullable<typeof size> => Boolean(size))
+    .sort((left, right) => left.area - right.area);
+
+  return (
+    parsed.find((size) => Math.max(size.width, size.height) >= 640)?.value ??
+    parsed[0]?.value
+  );
 };
 
 export default function FaceScanScreen() {
@@ -78,6 +114,7 @@ export default function FaceScanScreen() {
   const cameraRef = useRef<CameraView>(null);
   const [permission, requestPermission] = useCameraPermissions();
   const [cameraReady, setCameraReady] = useState(false);
+  const [pictureSize, setPictureSize] = useState<string | undefined>();
   const [progress, setProgress] = useState(0);
   const [scanState, setScanState] = useState<"scanning" | "success" | "error">(
     "scanning",
@@ -107,13 +144,29 @@ export default function FaceScanScreen() {
         ? "Face match passed. Starting your shift timer..."
         : "Face match passed. Closing your shift...";
 
+  const handleCameraReady = useCallback(() => {
+    setCameraReady(true);
+
+    void cameraRef.current
+      ?.getAvailablePictureSizesAsync()
+      .then((sizes) => {
+        const selected = selectFacePictureSize(sizes);
+        if (selected) {
+          setPictureSize(selected);
+        }
+      })
+      .catch(() => {
+        setPictureSize(undefined);
+      });
+  }, []);
+
   const submitScan = async () => {
     if (submitted) {
       return;
     }
 
     setSubmitted(true);
-    setMessage("Checking liveness and face match...");
+    setMessage("Capturing face and verifying identity...");
 
     if (!permission?.granted || !cameraReady || !cameraRef.current) {
       setSubmitted(false);
@@ -123,17 +176,7 @@ export default function FaceScanScreen() {
     }
 
     try {
-      const photo = await cameraRef.current.takePictureAsync({
-        quality: 0.35,
-        skipProcessing: false,
-      });
-
-      const faceScan = createFaceScan({
-        height: photo?.height,
-        mode,
-        uri: photo?.uri,
-        width: photo?.width,
-      });
+      const faceScan = await captureCameraFaceScan(mode, cameraRef.current);
 
       if (mode === "enroll") {
         await enrollMutation.mutateAsync({
@@ -161,11 +204,10 @@ export default function FaceScanScreen() {
         queryClient.invalidateQueries(
           trpc.workforce.payrollPreview.queryFilter(),
         ),
-        queryClient.invalidateQueries(trpc.auth.currentViewer.queryFilter()),
       ]);
 
       setTimeout(() => {
-        router.replace("/");
+        router.replace("/dashboard");
       }, 700);
     } catch (error) {
       setSubmitted(false);
@@ -225,10 +267,10 @@ export default function FaceScanScreen() {
       <SafeAreaView className="flex-1 bg-[#071522]">
         <View className="flex-1 justify-center px-6">
           <View className="rounded-[32px] border border-white/12 bg-[#0e2435] p-6">
-            <Text className="text-xs font-semibold uppercase tracking-[3px] text-[#94d2bd]">
+            <Text className="text-xs font-semibold tracking-[3px] text-[#94d2bd] uppercase">
               WorkForcePro biometric gate
             </Text>
-            <Text className="mt-5 text-3xl font-semibold leading-10 text-white">
+            <Text className="mt-5 text-3xl leading-10 font-semibold text-white">
               Camera access required
             </Text>
             <Text className="mt-3 text-base leading-7 text-[#b7cad6]">
@@ -245,7 +287,7 @@ export default function FaceScanScreen() {
             </Pressable>
             <Pressable
               className="mt-3 rounded-2xl border border-white/15 px-4 py-4"
-              onPress={() => router.replace("/")}
+              onPress={() => router.replace("/dashboard")}
             >
               <Text className="text-center text-sm font-semibold text-white">
                 Back to dashboard
@@ -261,21 +303,21 @@ export default function FaceScanScreen() {
     <SafeAreaView className="flex-1 bg-[#071522]">
       <View className="flex-1 px-6 py-8">
         <View className="flex-row items-center justify-between">
-          <Text className="text-xs font-semibold uppercase tracking-[3px] text-[#94d2bd]">
+          <Text className="text-xs font-semibold tracking-[3px] text-[#94d2bd] uppercase">
             WorkForcePro biometric gate
           </Text>
           <Pressable
             className="rounded-full border border-white/15 px-4 py-2"
-            onPress={() => router.replace("/")}
+            onPress={() => router.replace("/dashboard")}
           >
-            <Text className="text-xs font-semibold uppercase tracking-[2px] text-white">
+            <Text className="text-xs font-semibold tracking-[2px] text-white uppercase">
               Cancel
             </Text>
           </Pressable>
         </View>
 
         <View className="mt-10 rounded-[32px] border border-white/12 bg-[#0e2435] p-6">
-          <Text className="text-3xl font-semibold leading-10 text-white">
+          <Text className="text-3xl leading-10 font-semibold text-white">
             {title}
           </Text>
           <Text className="mt-3 text-base leading-7 text-[#b7cad6]">
@@ -288,11 +330,12 @@ export default function FaceScanScreen() {
                 ref={cameraRef}
                 facing="front"
                 mode="picture"
-                onCameraReady={() => setCameraReady(true)}
+                onCameraReady={handleCameraReady}
                 onMountError={() => {
                   setScanState("error");
                   setMessage("Camera could not be opened. Please try again.");
                 }}
+                pictureSize={pictureSize}
                 style={StyleSheet.absoluteFill}
               />
               <View className="absolute inset-0 items-center justify-center bg-[#071522]/20">
@@ -322,7 +365,7 @@ export default function FaceScanScreen() {
             />
           </View>
 
-          <Text className="mt-3 text-right text-xs font-semibold uppercase tracking-[2px] text-[#94d2bd]">
+          <Text className="mt-3 text-right text-xs font-semibold tracking-[2px] text-[#94d2bd] uppercase">
             {progress}% verified
           </Text>
         </View>
@@ -331,7 +374,7 @@ export default function FaceScanScreen() {
           <View className="mt-5 flex-row gap-3">
             <Pressable
               className="flex-1 rounded-2xl border border-white/15 px-4 py-4"
-              onPress={() => router.replace("/")}
+              onPress={() => router.replace("/dashboard")}
             >
               <Text className="text-center text-sm font-semibold text-white">
                 Back
@@ -350,4 +393,40 @@ export default function FaceScanScreen() {
       </View>
     </SafeAreaView>
   );
+}
+
+async function captureCameraFaceScan(
+  mode: ScanMode,
+  camera: CameraView | null,
+) {
+  if (!camera) {
+    throw new Error("Camera is not ready yet. Please try again.");
+  }
+
+  const photo = await camera.takePictureAsync({
+    base64: true,
+    imageType: "jpg",
+    quality: 0.22,
+    skipProcessing: false,
+  });
+
+  if (!photo?.base64) {
+    throw new Error(
+      "Camera capture did not include image data for face verification.",
+    );
+  }
+
+  if (photo.base64.length > maxFaceImageBase64Length) {
+    throw new Error(
+      "Camera capture was too large for face verification. Move closer to the camera and retry.",
+    );
+  }
+
+  return createFaceScan({
+    height: photo.height,
+    imageBase64: photo.base64,
+    mode,
+    uri: photo.uri,
+    width: photo.width,
+  });
 }

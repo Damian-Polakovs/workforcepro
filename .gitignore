@@ -33,6 +33,9 @@ npm-debug.log*
 yarn-debug.log*
 yarn-error.log*
 .pnpm-debug.log*
+.codex-logs/
+.codex-dev.*.log
+.codex-docx-work/
 
 # local env files
 .env

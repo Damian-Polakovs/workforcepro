@@ -66,10 +66,9 @@ export const viewerEmailSchema = z
 
 export const faceScanSchema = z.object({
   capturedAt: z.string().datetime(),
-  confidence: z.number().min(0).max(1),
   deviceLabel: z.string().min(2).max(80).optional(),
   frameSignature: z.string().min(16).max(256),
-  livenessPassed: z.boolean(),
+  imageBase64: z.string().min(500).max(12_000_000),
 });
 
 export const enrollFaceInputSchema = z

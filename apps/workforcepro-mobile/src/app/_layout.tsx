@@ -5,7 +5,6 @@ import { tokenCache } from "@clerk/expo/token-cache";
 import { QueryClientProvider } from "@tanstack/react-query";
 import { useEffect } from "react";
 
-import { DemoSessionProvider } from "~/utils/auth";
 import { queryClient, setClerkTokenGetter } from "~/utils/api";
 
 import "../styles.css";
@@ -42,17 +41,15 @@ export default function RootLayout() {
     <ClerkProvider publishableKey={clerkPublishableKey} tokenCache={tokenCache}>
       <QueryClientProvider client={queryClient}>
         <ClerkTokenBridge>
-          <DemoSessionProvider>
-            <Stack
-              screenOptions={{
-                contentStyle: {
-                  backgroundColor: "#0d1b2a",
-                },
-                headerShown: false,
-              }}
-            />
-            <StatusBar style="light" />
-          </DemoSessionProvider>
+          <Stack
+            screenOptions={{
+              contentStyle: {
+                backgroundColor: "#0d1b2a",
+              },
+              headerShown: false,
+            }}
+          />
+          <StatusBar style="light" />
         </ClerkTokenBridge>
       </QueryClientProvider>
     </ClerkProvider>

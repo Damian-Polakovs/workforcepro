@@ -6,7 +6,40 @@ import { fileURLToPath } from "node:url";
 const scriptDir = path.dirname(fileURLToPath(import.meta.url));
 const appDir = path.resolve(scriptDir, "..");
 const lockPath = path.join(appDir, ".next", "dev", "lock");
+const devHost = process.env.NEXT_DEV_HOST?.trim() || "0.0.0.0";
+const devPort = Number.parseInt(process.env.PORT?.trim() ?? "", 10) || 3000;
+const healthCheckPath = "/api/trpc/workforce.dashboard";
+const healthCheckTimeoutMs = 4_000;
+const requestedBundler =
+  process.env.NEXT_DEV_BUNDLER?.trim().toLowerCase() ?? "webpack";
+const useTurbopack =
+  requestedBundler === "turbo" || requestedBundler === "turbopack";
 
+if (
+  requestedBundler !== "webpack" &&
+  requestedBundler !== "turbo" &&
+  requestedBundler !== "turbopack"
+) {
+  console.warn(
+    `Unrecognized NEXT_DEV_BUNDLER="${requestedBundler}". Falling back to webpack.`,
+  );
+}
+
+function getNextDevArgs() {
+  const args = ["dev", "--hostname", devHost];
+  const port = process.env.PORT?.trim();
+
+  if (port) {
+    args.push("--port", port);
+  }
+
+  args.push(useTurbopack ? "--turbo" : "--webpack");
+  return args;
+}
+
+/**
+ * @param {string} output
+ */
 function isNextLockError(output) {
   const text = output.toLowerCase();
   return (
@@ -15,22 +48,31 @@ function isNextLockError(output) {
   );
 }
 
+/**
+ * @param {string} filePath
+ */
 async function isLockHeldByAnotherProcess(filePath) {
   try {
     const handle = await open(filePath, "r+");
     await handle.close();
     return false;
   } catch (error) {
-    return error?.code === "EBUSY" || error?.code === "EPERM";
+    if (!(error instanceof Error)) {
+      return false;
+    }
+
+    const code = /** @type {NodeJS.ErrnoException} */ (error).code;
+    return code === "EBUSY" || code === "EPERM";
   }
 }
 
 function startNextDev() {
   const command = process.platform === "win32" ? "cmd.exe" : "next";
+  const nextArgs = getNextDevArgs();
   const args =
     process.platform === "win32"
-      ? ["/d", "/s", "/c", "next", "dev"]
-      : ["dev"];
+      ? ["/d", "/s", "/c", "next", ...nextArgs]
+      : nextArgs;
 
   const child = spawn(command, args, {
     stdio: ["inherit", "pipe", "pipe"],
@@ -53,6 +95,26 @@ function startNextDev() {
   });
 
   return { child, getOutput: () => output };
+}
+
+async function isServerHealthy() {
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), healthCheckTimeoutMs);
+
+  try {
+    const response = await fetch(
+      `http://127.0.0.1:${devPort}${healthCheckPath}`,
+      {
+        method: "OPTIONS",
+        signal: controller.signal,
+      },
+    );
+    return response.status >= 200 && response.status < 500;
+  } catch {
+    return false;
+  } finally {
+    clearTimeout(timeout);
+  }
 }
 
 async function main() {
@@ -82,6 +144,25 @@ async function main() {
 
   const output = getOutput();
   if (isNextLockError(output) && (await isLockHeldByAnotherProcess(lockPath))) {
+    if (await isServerHealthy()) {
+      console.log(
+        "Next.js dev server already running for this app. Reusing existing instance.",
+      );
+      process.exit(0);
+      return;
+    }
+
+    console.error(
+      `Next.js dev lock is held, but the existing server did not respond on http://127.0.0.1:${devPort}${healthCheckPath} within ${healthCheckTimeoutMs / 1000}s.`,
+    );
+    console.error(
+      "The existing Next.js process appears unhealthy. Stop stale Node/Next processes and start the backend again.",
+    );
+    process.exit(1);
+    return;
+  }
+
+  if (isNextLockError(output)) {
     console.log(
       "Next.js dev server already running for this app. Reusing existing instance.",
     );

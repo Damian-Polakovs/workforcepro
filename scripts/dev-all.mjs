@@ -34,12 +34,20 @@ function spawnBackend() {
   return child;
 }
 
+function getMobileScriptName() {
+  if (process.argv.includes("--tunnel")) {
+    return "dev:tunnel";
+  }
+
+  return "dev";
+}
+
 function spawnMobileInteractive() {
   const interactiveTerminal = Boolean(
     process.stdin.isTTY && process.stdout.isTTY && process.stderr.isTTY,
   );
 
-  const child = spawnPnpm(["-F", "@workforcepro/mobile", "dev"], {
+  const child = spawnPnpm(["-F", "@workforcepro/mobile", getMobileScriptName()], {
     stdio: interactiveTerminal ? "inherit" : ["ignore", "pipe", "pipe"],
     env: process.env,
   });

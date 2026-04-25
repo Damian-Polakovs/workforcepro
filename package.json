@@ -21,7 +21,8 @@
     "dev:frontend": "pnpm -F @workforcepro/mobile dev",
     "dev:mobile": "pnpm -F @workforcepro/mobile dev",
     "dev:next": "pnpm -F @acme/nextjs dev",
-    "dev:tunnel": "pnpm -F @workforcepro/mobile dev:tunnel",
+    "dev:tunnel": "node ./scripts/dev-all.mjs --tunnel",
+    "dev:mobile:tunnel": "pnpm -F @workforcepro/mobile dev:tunnel",
     "eas:android:dev": "pnpm --dir apps/workforcepro-mobile exec eas build -p android --profile development",
     "eas:android:preview": "pnpm --dir apps/workforcepro-mobile exec eas build -p android --profile preview",
     "eas:android:production": "pnpm --dir apps/workforcepro-mobile exec eas build -p android --profile production",
@@ -33,12 +34,10 @@
     "lint:ws": "pnpm dlx sherif@latest",
     "postinstall": "pnpm lint:ws",
     "typecheck": "turbo run typecheck",
-    "typecheck:mobile": "pnpm -F @workforcepro/mobile typecheck",
-    "ui-add": "turbo run ui-add"
+    "typecheck:mobile": "pnpm -F @workforcepro/mobile typecheck"
   },
   "devDependencies": {
     "@acme/prettier-config": "workspace:*",
-    "@turbo/gen": "^2.5.8",
     "dotenv-cli": "^10.0.0",
     "prettier": "catalog:",
     "turbo": "^2.5.8",

@@ -100,14 +100,17 @@ export type DashboardData = {
   alerts: DashboardAlert[];
   auditTrail: AuditEntry[];
   company: {
+    bankHolidayMultiplier: number;
     currency: string;
     name: string;
     overtimeDailyThreshold: number;
+    overtimeMultiplier: number;
     overtimeWeeklyThreshold: number;
     payrollFrequency: PayrollFrequency;
+    standardDayHours: number;
+    standardWeekHours: number;
     timezone: string;
   };
-  currentViewerEmailFallback: string;
   pendingCorrections: CorrectionCard[];
   pendingLeave: LeaveCard[];
   payroll: PayrollPreview | null;

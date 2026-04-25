@@ -1,40 +1,24 @@
 "use client";
 
 import * as React from "react";
-import { DesktopIcon, MoonIcon, SunIcon } from "@radix-ui/react-icons";
-import * as z from "zod/v4";
 
-import { Button } from "./button";
-import {
-  DropdownMenu,
-  DropdownMenuContent,
-  DropdownMenuItem,
-  DropdownMenuTrigger,
-} from "./dropdown-menu";
-
-const ThemeModeSchema = z.enum(["light", "dark", "auto"]);
+const themeModes = ["light", "dark", "auto"] as const;
 
 const themeKey = "theme-mode";
 
-export type ThemeMode = z.output<typeof ThemeModeSchema>;
+export type ThemeMode = (typeof themeModes)[number];
 export type ResolvedTheme = Exclude<ThemeMode, "auto">;
+
+const isThemeMode = (value: string | null): value is ThemeMode =>
+  themeModes.includes(value as ThemeMode);
 
 const getStoredThemeMode = (): ThemeMode => {
   if (typeof window === "undefined") return "auto";
   try {
     const storedTheme = localStorage.getItem(themeKey);
-    return ThemeModeSchema.parse(storedTheme);
+    return isThemeMode(storedTheme) ? storedTheme : "auto";
   } catch {
     return "auto";
-  }
-};
-
-const setStoredThemeMode = (theme: ThemeMode) => {
-  try {
-    const parsedTheme = ThemeModeSchema.parse(theme);
-    localStorage.setItem(themeKey, parsedTheme);
-  } catch {
-    // Silently fail if localStorage is unavailable
   }
 };
 
@@ -63,20 +47,13 @@ const setupPreferredListener = () => {
   return () => mediaQuery.removeEventListener("change", handler);
 };
 
-const getNextTheme = (current: ThemeMode): ThemeMode => {
-  const themes: ThemeMode[] =
-    getSystemTheme() === "dark"
-      ? ["auto", "light", "dark"]
-      : ["auto", "dark", "light"];
-  // eslint-disable-next-line @typescript-eslint/no-non-null-assertion
-  return themes[(themes.indexOf(current) + 1) % themes.length]!;
-};
-
 export const themeDetectorScript = (function () {
   function themeFn() {
-    const isValidTheme = (theme: string): theme is ThemeMode => {
+    const isValidTheme = (
+      theme: string,
+    ): theme is "light" | "dark" | "auto" => {
       const validThemes = ["light", "dark", "auto"] as const;
-      return validThemes.includes(theme as ThemeMode);
+      return validThemes.includes(theme as (typeof validThemes)[number]);
     };
 
     const storedTheme = localStorage.getItem("theme-mode") ?? "auto";
@@ -98,40 +75,27 @@ export const themeDetectorScript = (function () {
 interface ThemeContextProps {
   themeMode: ThemeMode;
   resolvedTheme: ResolvedTheme;
-  setTheme: (theme: ThemeMode) => void;
-  toggleMode: () => void;
 }
 const ThemeContext = React.createContext<ThemeContextProps | undefined>(
   undefined,
 );
 
 export function ThemeProvider({ children }: React.PropsWithChildren) {
-  const [themeMode, setThemeMode] = React.useState(getStoredThemeMode);
+  const [themeMode] = React.useState(getStoredThemeMode);
 
   React.useEffect(() => {
+    updateThemeClass(themeMode);
     if (themeMode !== "auto") return;
     return setupPreferredListener();
   }, [themeMode]);
 
   const resolvedTheme = themeMode === "auto" ? getSystemTheme() : themeMode;
 
-  const setTheme = (newTheme: ThemeMode) => {
-    setThemeMode(newTheme);
-    setStoredThemeMode(newTheme);
-    updateThemeClass(newTheme);
-  };
-
-  const toggleMode = () => {
-    setTheme(getNextTheme(themeMode));
-  };
-
   return (
     <ThemeContext
       value={{
         themeMode,
         resolvedTheme,
-        setTheme,
-        toggleMode,
       }}
     >
       <script
@@ -149,36 +113,4 @@ export function useTheme() {
     throw new Error("useTheme must be used within a ThemeProvider");
   }
   return context;
-}
-
-export function ThemeToggle() {
-  const { setTheme } = useTheme();
-
-  return (
-    <DropdownMenu>
-      <DropdownMenuTrigger asChild>
-        <Button
-          variant="outline"
-          size="icon"
-          className="[&>svg]:absolute [&>svg]:size-5 [&>svg]:scale-0"
-        >
-          <SunIcon className="light:scale-100! auto:scale-0!" />
-          <MoonIcon className="auto:scale-0! dark:scale-100!" />
-          <DesktopIcon className="auto:scale-100!" />
-          <span className="sr-only">Toggle theme</span>
-        </Button>
-      </DropdownMenuTrigger>
-      <DropdownMenuContent align="end">
-        <DropdownMenuItem onClick={() => setTheme("light")}>
-          Light
-        </DropdownMenuItem>
-        <DropdownMenuItem onClick={() => setTheme("dark")}>
-          Dark
-        </DropdownMenuItem>
-        <DropdownMenuItem onClick={() => setTheme("auto")}>
-          System
-        </DropdownMenuItem>
-      </DropdownMenuContent>
-    </DropdownMenu>
-  );
 }

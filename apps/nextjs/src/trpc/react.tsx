@@ -12,11 +12,6 @@ import { createTRPCContext } from "@trpc/tanstack-react-query";
 import SuperJSON from "superjson";
 
 import type { AppRouter } from "@acme/api";
-import {
-  DEFAULT_ADMIN_EMAIL,
-  DEMO_VIEWER_STORAGE_KEY,
-  VIEWER_HEADER_NAME,
-} from "@acme/validators";
 
 import { env } from "~/env";
 import { createQueryClient } from "./query-client";
@@ -30,16 +25,6 @@ const getQueryClient = () => {
 
   clientQueryClientSingleton ??= createQueryClient();
   return clientQueryClientSingleton;
-};
-
-const readViewerEmail = () => {
-  if (typeof window === "undefined") {
-    return DEFAULT_ADMIN_EMAIL;
-  }
-
-  return (
-    window.localStorage.getItem(DEMO_VIEWER_STORAGE_KEY) ?? DEFAULT_ADMIN_EMAIL
-  );
 };
 
 export const { useTRPC, TRPCProvider } = createTRPCContext<AppRouter>();
@@ -59,7 +44,6 @@ export function TRPCReactProvider(props: { children: React.ReactNode }) {
           headers() {
             const headers = new Headers();
             headers.set("x-trpc-source", "nextjs-react");
-            headers.set(VIEWER_HEADER_NAME, readViewerEmail());
             return headers;
           },
           transformer: SuperJSON,

@@ -3,8 +3,6 @@
 import { UserButton } from "@clerk/nextjs";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 
-import { DEMO_VIEWER_STORAGE_KEY } from "@acme/validators";
-
 import { useTRPC } from "~/trpc/react";
 
 function MetricTile(props: { label: string; value: string }) {
@@ -33,7 +31,6 @@ export function WorkforceDashboard() {
   const trpc = useTRPC();
   const queryClient = useQueryClient();
 
-  const profilesQuery = useQuery(trpc.auth.demoProfiles.queryOptions());
   const dashboardQuery = useQuery(
     trpc.workforce.dashboard.queryOptions({ focus: "OPS" }),
   );
@@ -69,12 +66,6 @@ export function WorkforceDashboard() {
       onSuccess: refresh,
     }),
   );
-
-  const profiles = profilesQuery.data ?? [];
-  const setViewer = async (email: string) => {
-    window.localStorage.setItem(DEMO_VIEWER_STORAGE_KEY, email);
-    await refresh();
-  };
 
   if (dashboardQuery.isLoading) {
     return (
@@ -128,28 +119,9 @@ export function WorkforceDashboard() {
           <div className="max-w-xl">
             <div className="flex items-center gap-3">
               <UserButton />
-              <p className="text-sm text-slate-300">
-                Active profile:{" "}
-                <span className="font-semibold text-white">
-                  {dashboard.viewer.name}
-                </span>
+              <p className="rounded-full border border-white/15 bg-white/5 px-4 py-2 text-xs font-semibold tracking-[0.2em] text-slate-200 uppercase">
+                {dashboard.viewer.role} account
               </p>
-            </div>
-            <div className="mt-4 flex flex-wrap gap-3">
-              {profiles.map((profile) => (
-                <button
-                  key={profile.email}
-                  className={`rounded-full px-4 py-2 text-xs font-semibold tracking-[0.2em] uppercase transition ${
-                    dashboard.viewer.email === profile.email
-                      ? "bg-[#ff764a] text-white"
-                      : "border border-white/15 bg-white/5 text-slate-200 hover:bg-white/12"
-                  }`}
-                  onClick={() => void setViewer(profile.email)}
-                  type="button"
-                >
-                  {profile.role}
-                </button>
-              ))}
             </div>
           </div>
         </div>
@@ -366,8 +338,8 @@ export function WorkforceDashboard() {
                   {payrollQuery.data.label}
                 </p>
                 <p className="mt-2 text-sm leading-6 text-slate-600">
-                  {payrollQuery.data.totals.employees} staff · EUR{" "}
-                  {payrollQuery.data.totals.grossPay.toFixed(2)} gross ·{" "}
+                  {payrollQuery.data.totals.employees} staff - EUR{" "}
+                  {payrollQuery.data.totals.grossPay.toFixed(2)} gross -{" "}
                   {payrollQuery.data.totals.overtimeHours.toFixed(1)} overtime
                   hours
                 </p>

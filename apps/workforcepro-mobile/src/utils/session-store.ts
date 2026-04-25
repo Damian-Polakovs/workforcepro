@@ -13,8 +13,6 @@ let viewerEmailCache: string = defaultMobileViewerEmail;
 
 const secureStoreApi = SecureStore as {
   getItem?: (key: string) => string | null;
-  getItemAsync?: (key: string) => Promise<string | null>;
-  setItemAsync?: (key: string, value: string) => Promise<void>;
 };
 
 const isWeb = Platform.OS === "web";
@@ -32,32 +30,6 @@ const getFromLocalStorage = () => {
   }
 };
 
-const setToLocalStorage = (email: string) => {
-  if (!canUseLocalStorage()) return;
-
-  try {
-    window.localStorage.setItem(DEMO_VIEWER_STORAGE_KEY, email);
-  } catch {
-    // Ignore storage write failures in restricted browser contexts.
-  }
-};
-
-export const getActiveViewerEmail = async () => {
-  if (isWeb) {
-    const stored = getFromLocalStorage();
-    viewerEmailCache = stored ?? defaultMobileViewerEmail;
-    return stored;
-  }
-
-  if (typeof secureStoreApi.getItemAsync === "function") {
-    const stored = await secureStoreApi.getItemAsync(DEMO_VIEWER_STORAGE_KEY);
-    viewerEmailCache = stored ?? defaultMobileViewerEmail;
-    return stored;
-  }
-
-  return viewerEmailCache;
-};
-
 export const getActiveViewerEmailSync = () => {
   if (isWeb) {
     const stored = getFromLocalStorage();
@@ -72,17 +44,4 @@ export const getActiveViewerEmailSync = () => {
   }
 
   return viewerEmailCache;
-};
-
-export const setActiveViewerEmail = async (email: string) => {
-  viewerEmailCache = email;
-
-  if (isWeb) {
-    setToLocalStorage(email);
-    return;
-  }
-
-  if (typeof secureStoreApi.setItemAsync === "function") {
-    await secureStoreApi.setItemAsync(DEMO_VIEWER_STORAGE_KEY, email);
-  }
 };

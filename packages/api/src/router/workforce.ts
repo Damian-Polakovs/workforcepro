@@ -1,4 +1,3 @@
-import { createHash } from "node:crypto";
 import type { TRPCRouterRecord } from "@trpc/server";
 import { TRPCError } from "@trpc/server";
 
@@ -25,8 +24,6 @@ import {
   clockActionInputSchema,
   correctionRequestInputSchema,
   dashboardInputSchema,
-  DEFAULT_ADMIN_EMAIL,
-  defaultDemoProfiles,
   enrollFaceInputSchema,
   leaveRequestInputSchema,
   payrollPreviewInputSchema,
@@ -35,6 +32,11 @@ import {
 } from "@acme/validators";
 
 import type { createTRPCContext } from "../trpc";
+import type { FaceVerificationScan } from "../biometrics/face-verification";
+import {
+  enrollFaceTemplate,
+  verifyFaceTemplate,
+} from "../biometrics/face-verification";
 import { managerProcedure, protectedProcedure } from "../trpc";
 
 const shiftInclude = {
@@ -140,6 +142,18 @@ type CorrectionCardSource = Prisma.TimeCorrectionGetPayload<{
 type AuditCardSource = Prisma.AuditLogGetPayload<{
   include: typeof auditInclude;
 }>;
+
+function getRoleHeadline(role: Viewer["role"]) {
+  if (role === "ADMIN") {
+    return "Admin access with payroll, compliance, and operations controls.";
+  }
+
+  if (role === "MANAGER") {
+    return "Manager access with team approvals, attendance, and payroll insights.";
+  }
+
+  return "Employee access with secure clocking and self-service requests.";
+}
 
 function scopedUserWhere(viewer: Viewer): Prisma.UserWhereInput {
   if (viewer.role === "ADMIN") {
@@ -249,19 +263,6 @@ function scopedCorrectionWhere(
   };
 }
 
-function assertFaceMatch(faceScan: {
-  confidence: number;
-  livenessPassed: boolean;
-}) {
-  if (!faceScan.livenessPassed || faceScan.confidence < 0.84) {
-    throw new TRPCError({
-      code: "PRECONDITION_FAILED",
-      message:
-        "Face verification did not reach the minimum confidence for a secure clock event.",
-    });
-  }
-}
-
 function assertFaceEnrollment(viewer: Viewer) {
   if (!viewer.faceEnrolled || !viewer.faceTemplateHash) {
     throw new TRPCError({
@@ -270,24 +271,63 @@ function assertFaceEnrollment(viewer: Viewer) {
         "Create your first face scan before using secure clock in or clock out.",
     });
   }
+
+  return viewer.faceTemplateHash;
 }
 
-function buildFaceTemplateHash(input: {
-  faceScan: { capturedAt: string; frameSignature: string };
-  userId: string;
+async function createFaceEnrollmentTemplate(faceScan: FaceVerificationScan) {
+  try {
+    return await enrollFaceTemplate(faceScan);
+  } catch (error) {
+    throw new TRPCError({
+      code: "PRECONDITION_FAILED",
+      message:
+        error instanceof Error
+          ? error.message
+          : "Face enrollment failed. Capture a clearer front-facing photo.",
+    });
+  }
+}
+
+async function verifyFaceForClockAction(args: {
+  faceScan: FaceVerificationScan;
+  storedTemplateHash: string;
 }) {
-  return createHash("sha256")
-    .update(
-      `${input.userId}:${input.faceScan.frameSignature}:${input.faceScan.capturedAt}`,
-    )
-    .digest("hex");
+  try {
+    const result = await verifyFaceTemplate({
+      scan: args.faceScan,
+      storedTemplateRef: args.storedTemplateHash,
+    });
+
+    if (!result.matched) {
+      throw new TRPCError({
+        code: "PRECONDITION_FAILED",
+        message:
+          "Face verification did not match the enrolled profile for this secure clock event.",
+      });
+    }
+
+    return result.confidence;
+  } catch (error) {
+    if (error instanceof TRPCError) {
+      throw error;
+    }
+
+    throw new TRPCError({
+      code: "PRECONDITION_FAILED",
+      message:
+        error instanceof Error
+          ? error.message
+          : "Face verification failed during secure clock processing.",
+    });
+  }
 }
 function toShiftCard(shift: ShiftCardSource) {
   return {
     id: shift.id,
     label: shiftLabel(shift),
     premiumMultiplier: shift.premiumMultiplier,
-    range: `${formatDisplayDate(shift.startTime)} Â· ${formatDisplayTime(shift.startTime)}-${formatDisplayTime(shift.endTime)}`,
+    range: `${formatDisplayDate(shift.startTime)} - ${formatDisplayTime(shift.startTime)}-${formatDisplayTime(shift.endTime)}`,
     startTime: shift.startTime,
     endTime: shift.endTime,
     notes: shift.notes,
@@ -321,7 +361,7 @@ function toTimesheetCard(timesheet: TimesheetCardSource) {
     id: timesheet.id,
     label: timesheet.shift
       ? shiftLabel(timesheet.shift)
-      : `Unscheduled shift Â· ${formatDisplayDate(timesheet.workDate)}`,
+      : `Unscheduled shift - ${formatDisplayDate(timesheet.workDate)}`,
     lateMinutes: timesheet.lateMinutes,
     overtimeMinutes: timesheet.overtimeMinutes,
     reference: timesheet.reference,
@@ -543,6 +583,9 @@ async function loadDashboard(args: {
           gte: now,
         },
         status: "PUBLISHED",
+        timesheet: {
+          is: null,
+        },
       },
     }),
     args.db.shift.findMany({
@@ -555,6 +598,9 @@ async function loadDashboard(args: {
         startTime: {
           gte: startOfDay(now),
           lte: endOfDay(now),
+        },
+        timesheet: {
+          is: null,
         },
       },
     }),
@@ -724,14 +770,17 @@ async function loadDashboard(args: {
     alerts,
     auditTrail: recentAudit.map(toAuditCard),
     company: {
+      bankHolidayMultiplier: args.viewer.company.bankHolidayMultiplier,
       currency: args.viewer.company.currency,
       name: args.viewer.company.name,
       overtimeDailyThreshold: args.viewer.company.overtimeDailyThreshold,
+      overtimeMultiplier: args.viewer.company.overtimeMultiplier,
       overtimeWeeklyThreshold: args.viewer.company.overtimeWeeklyThreshold,
       payrollFrequency: args.viewer.company.payrollFrequency,
+      standardDayHours: args.viewer.company.standardDayHours,
+      standardWeekHours: args.viewer.company.standardWeekHours,
       timezone: args.viewer.company.timezone,
     },
-    currentViewerEmailFallback: DEFAULT_ADMIN_EMAIL,
     pendingCorrections: pendingCorrections.map(toCorrectionCard),
     pendingLeave: pendingLeave.map(toLeaveCard),
     payroll,
@@ -794,9 +843,7 @@ async function loadDashboard(args: {
     upcomingShifts: upcomingShifts.map(toShiftCard),
     viewer: {
       avatarInitials: args.viewer.avatarInitials,
-      defaultProfile:
-        defaultDemoProfiles.find((entry) => entry.email === args.viewer.email)
-          ?.headline ?? "WorkForcePro dashboard access",
+      defaultProfile: getRoleHeadline(args.viewer.role),
       email: args.viewer.email,
       faceEnrollmentCapturedAt: args.viewer.faceEnrollmentCapturedAt,
       faceEnrollmentConfidence: args.viewer.faceEnrollmentConfidence,
@@ -935,8 +982,11 @@ export const workforceRouter = {
   clockIn: protectedProcedure
     .input(clockActionInputSchema)
     .mutation(async ({ ctx, input }) => {
-      assertFaceEnrollment(ctx.viewer);
-      assertFaceMatch(input.faceScan);
+      const enrolledTemplateHash = assertFaceEnrollment(ctx.viewer);
+      const faceConfidence = await verifyFaceForClockAction({
+        faceScan: input.faceScan,
+        storedTemplateHash: enrolledTemplateHash,
+      });
 
       const openTimesheet = await findViewerOpenTimesheet({
         db: ctx.db,
@@ -963,6 +1013,9 @@ export const workforceRouter = {
           startTime: {
             lte: new Date(Date.now() + 8 * 60 * 60 * 1000),
           },
+          timesheet: {
+            is: null,
+          },
         },
       });
 
@@ -974,20 +1027,36 @@ export const workforceRouter = {
         });
       }
 
-      const timesheet = await ctx.db.timesheet.create({
-        data: {
-          clockInAt: new Date(input.faceScan.capturedAt),
-          companyId: ctx.viewer.companyId,
-          faceConfidence: input.faceScan.confidence,
-          faceVerified: true,
-          notes: input.note,
-          reference: `TS-${ctx.viewer.id}-${Date.now()}`,
-          shiftId: shift.id,
-          status: TimesheetStatus.CLOCKED_IN,
-          userId: ctx.viewer.id,
-          workDate: startOfDay(new Date()),
-        },
-      });
+      const timesheet = await ctx.db.timesheet
+        .create({
+          data: {
+            clockInAt: new Date(input.faceScan.capturedAt),
+            companyId: ctx.viewer.companyId,
+            faceConfidence,
+            faceVerified: true,
+            notes: input.note,
+            reference: `TS-${ctx.viewer.id}-${Date.now()}`,
+            shiftId: shift.id,
+            status: TimesheetStatus.CLOCKED_IN,
+            userId: ctx.viewer.id,
+            workDate: startOfDay(new Date()),
+          },
+        })
+        .catch((error: unknown) => {
+          if (
+            error instanceof Error &&
+            error.message.includes("Unique constraint") &&
+            error.message.includes("shiftId")
+          ) {
+            throw new TRPCError({
+              code: "CONFLICT",
+              message:
+                "This scheduled shift already has a timesheet. Refresh your dashboard before trying another clock action.",
+            });
+          }
+
+          throw error;
+        });
 
       await createAudit(ctx.db, {
         action: "timesheet.clock_in",
@@ -1008,8 +1077,11 @@ export const workforceRouter = {
   clockOut: protectedProcedure
     .input(clockActionInputSchema)
     .mutation(async ({ ctx, input }) => {
-      assertFaceEnrollment(ctx.viewer);
-      assertFaceMatch(input.faceScan);
+      const enrolledTemplateHash = assertFaceEnrollment(ctx.viewer);
+      const faceConfidence = await verifyFaceForClockAction({
+        faceScan: input.faceScan,
+        storedTemplateHash: enrolledTemplateHash,
+      });
 
       const openTimesheet = await findViewerOpenTimesheet({
         db: ctx.db,
@@ -1033,7 +1105,7 @@ export const workforceRouter = {
       await ctx.db.timesheet.update({
         data: {
           clockOutAt: new Date(input.faceScan.capturedAt),
-          faceConfidence: input.faceScan.confidence,
+          faceConfidence,
           faceVerified: true,
           notes: input.note ?? openTimesheet.notes,
           status: TimesheetStatus.CLOCKED_OUT,
@@ -1077,17 +1149,14 @@ export const workforceRouter = {
   enrollFace: protectedProcedure
     .input(enrollFaceInputSchema)
     .mutation(async ({ ctx, input }) => {
-      assertFaceMatch(input.faceScan);
+      const enrollment = await createFaceEnrollmentTemplate(input.faceScan);
 
       const updatedViewer = await ctx.db.user.update({
         data: {
           faceEnrolled: true,
           faceEnrollmentCapturedAt: new Date(input.faceScan.capturedAt),
-          faceEnrollmentConfidence: input.faceScan.confidence,
-          faceTemplateHash: buildFaceTemplateHash({
-            faceScan: input.faceScan,
-            userId: ctx.viewer.id,
-          }),
+          faceEnrollmentConfidence: enrollment.confidence,
+          faceTemplateHash: enrollment.templateRef,
         },
         include: {
           company: true,

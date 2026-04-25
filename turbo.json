@@ -38,10 +38,6 @@
     "studio": {
       "cache": false,
       "persistent": true
-    },
-    "ui-add": {
-      "cache": false,
-      "interactive": true
     }
   },
   "globalEnv": [
@@ -53,6 +49,12 @@
     "CLERK_SECRET_KEY",
     "NEXT_PUBLIC_CLERK_FRONTEND_API_URL",
     "NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY",
+    "WORKFORCE_CLERK_TIMEOUT_MS",
+    "WORKFORCE_FACE_PROVIDER",
+    "WORKFORCE_FACEPP_API_BASE_URL",
+    "WORKFORCE_FACEPP_API_KEY",
+    "WORKFORCE_FACEPP_API_SECRET",
+    "WORKFORCE_FACE_MATCH_THRESHOLD",
     "PORT"
   ],
   "globalPassThroughEnv": [
